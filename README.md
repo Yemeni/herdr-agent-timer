@@ -2,6 +2,8 @@
 
 A Herdr plugin that alternates each agent's status label with its elapsed
 time:
+
+
 <img width="346" height="316" alt="image" src="https://github.com/user-attachments/assets/6f6fbed6-bc66-4df2-a033-df2eb4f44a90" />
 
 ```text
