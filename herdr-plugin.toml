@@ -1,0 +1,31 @@
+id = "yousef.agent-timer"
+name = "Agent Timer"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Alternate agent status labels with elapsed time"
+platforms = ["linux"]
+
+[[startup]]
+command = ["bash", "timer.sh", "--start"]
+
+[[actions]]
+id = "start"
+title = "Start agent timer"
+contexts = ["global"]
+command = ["bash", "timer.sh", "--start"]
+
+[[actions]]
+id = "stop"
+title = "Stop agent timer"
+contexts = ["global"]
+command = ["bash", "timer.sh", "--stop"]
+
+[[actions]]
+id = "toggle"
+title = "Toggle agent timer"
+contexts = ["global"]
+command = ["bash", "timer.sh", "--toggle"]
+
+[[events]]
+on = "pane.created"
+command = ["bash", "timer.sh", "--start"]
