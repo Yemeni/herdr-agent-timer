@@ -17,7 +17,7 @@ Link this checkout during development:
 
 ```bash
 herdr plugin link ~/dotfiles/herdr-plugins/agent-timer
-herdr plugin action invoke start --plugin yousef.agent-timer
+herdr plugin action invoke start --plugin yemeni.agent-timer
 ```
 
 Install the published plugin directly from GitHub:
@@ -34,9 +34,9 @@ process exits.
 ## Actions
 
 ```bash
-herdr plugin action invoke start --plugin yousef.agent-timer
-herdr plugin action invoke stop --plugin yousef.agent-timer
-herdr plugin action invoke toggle --plugin yousef.agent-timer
+herdr plugin action invoke start --plugin yemeni.agent-timer
+herdr plugin action invoke stop --plugin yemeni.agent-timer
+herdr plugin action invoke toggle --plugin yemeni.agent-timer
 ```
 
 Requires Bash, `jq`, and `flock`. On Linux with a user systemd instance,

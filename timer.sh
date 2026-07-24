@@ -2,7 +2,7 @@
 
 set -uo pipefail
 
-source_id="plugin:yousef.agent-timer"
+source_id="plugin:yemeni.agent-timer"
 herdr_bin="${HERDR_BIN_PATH:-herdr}"
 plugin_root="${HERDR_PLUGIN_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
 plugin_state_dir="${HERDR_PLUGIN_STATE_DIR:-${TMPDIR:-/tmp}}"
@@ -36,7 +36,7 @@ ensure_daemon() {
             --setenv "HERDR_ENV=1" \
             --setenv "HERDR_SOCKET_PATH=$HERDR_SOCKET_PATH" \
             --setenv "HERDR_BIN_PATH=$herdr_bin" \
-            --setenv "HERDR_PLUGIN_ID=${HERDR_PLUGIN_ID:-yousef.agent-timer}" \
+            --setenv "HERDR_PLUGIN_ID=${HERDR_PLUGIN_ID:-yemeni.agent-timer}" \
             --setenv "HERDR_PLUGIN_ROOT=$plugin_root" \
             --setenv "HERDR_PLUGIN_STATE_DIR=$plugin_state_dir" \
             --setenv "PATH=$PATH" \
