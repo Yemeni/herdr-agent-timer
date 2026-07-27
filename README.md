@@ -29,10 +29,10 @@ Install the published plugin directly from GitHub:
 herdr plugin install Yemeni/herdr-agent-timer
 ```
 
-On Herdr versions with startup-hook support, the startup hook starts the
-timer after every server restart. The pane-created hook provides the same
-startup path on older Herdr versions and restarts it if the background
-process exits.
+The first start creates and enables a systemd user service. It starts
+automatically after login, survives machine reboots, and keeps retrying
+while the Herdr server is unavailable. The startup and pane-created hooks
+also ensure the service exists after installing or updating the plugin.
 
 ## Actions
 
@@ -43,5 +43,7 @@ herdr plugin action invoke toggle --plugin yemeni.agent-timer
 ```
 
 Requires Bash, `jq`, and `flock`. On Linux with a user systemd instance,
-the plugin uses a transient user service; otherwise it falls back to a
-detached process.
+the plugin installs an enabled user service. The **Stop agent timer**
+action disables it, and **Start agent timer** enables it again. Without
+systemd, the plugin falls back to a detached process and relies on Herdr's
+startup hook after reboot.
