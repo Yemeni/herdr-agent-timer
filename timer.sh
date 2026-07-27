@@ -16,45 +16,93 @@ unit_name() {
     printf 'herdr-agent-timer-%s' "$(runtime_key)"
 }
 
-ensure_daemon() {
-    local service_name
+unit_path() {
+    local config_home
+    config_home="${XDG_CONFIG_HOME:-${HOME:+$HOME/.config}}"
+    [ -n "$config_home" ] || return 1
+    printf '%s/systemd/user/%s.service' "$config_home" "$(unit_name)"
+}
 
+systemd_quote() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//%/%%}"
+    printf '"%s"' "$value"
+}
+
+install_service() {
+    local service_name service_path service_dir candidate
+    service_name="$(unit_name)"
+    service_path="$(unit_path)" || return 1
+    service_dir="${service_path%/*}"
+
+    mkdir -p "$service_dir"
+    candidate="$(mktemp "$service_dir/.${service_name}.XXXXXX")" || return 1
+    trap 'rm -f "$candidate"' RETURN
+
+    {
+        printf '[Unit]\n'
+        printf 'Description=Herdr Agent Timer\n'
+        printf 'After=default.target\n\n'
+        printf '[Service]\n'
+        printf 'Type=simple\n'
+        printf 'ExecStart=%s --daemon\n' "$(systemd_quote "$script_path")"
+        printf 'Restart=always\n'
+        printf 'RestartSec=2\n'
+        printf 'Environment=%s\n' "$(systemd_quote "HERDR_ENV=1")"
+        printf 'Environment=%s\n' "$(systemd_quote "HERDR_SOCKET_PATH=$HERDR_SOCKET_PATH")"
+        printf 'Environment=%s\n' "$(systemd_quote "HERDR_BIN_PATH=$herdr_bin")"
+        printf 'Environment=%s\n' \
+            "$(systemd_quote "HERDR_PLUGIN_ID=${HERDR_PLUGIN_ID:-yemeni.agent-timer}")"
+        printf 'Environment=%s\n' "$(systemd_quote "HERDR_PLUGIN_ROOT=$plugin_root")"
+        printf 'Environment=%s\n' "$(systemd_quote "HERDR_PLUGIN_STATE_DIR=$plugin_state_dir")"
+        printf 'Environment=%s\n\n' "$(systemd_quote "PATH=$PATH")"
+        printf '[Install]\n'
+        printf 'WantedBy=default.target\n'
+    } >"$candidate"
+    chmod 0644 "$candidate"
+
+    if [ -r "$service_path" ] && cmp -s "$candidate" "$service_path"; then
+        rm -f "$candidate"
+        trap - RETURN
+        systemctl --user enable "$service_name" >/dev/null 2>&1 || return 1
+        systemctl --user is-active "$service_name" >/dev/null 2>&1 ||
+            systemctl --user start "$service_name" >/dev/null 2>&1
+        return
+    fi
+
+    mv "$candidate" "$service_path"
+    trap - RETURN
+    systemctl --user daemon-reload >/dev/null 2>&1 || return 1
+    systemctl --user enable "$service_name" >/dev/null 2>&1 || return 1
+    systemctl --user restart "$service_name" >/dev/null 2>&1
+}
+
+ensure_daemon() {
     [ "${HERDR_ENV:-}" = 1 ] || return 0
     [ -n "${HERDR_SOCKET_PATH:-}" ] || return 0
     command -v "$herdr_bin" >/dev/null 2>&1 || return 0
     command -v jq >/dev/null 2>&1 || return 0
 
-    service_name="$(unit_name)"
-
-    if command -v systemd-run >/dev/null 2>&1 &&
-        systemctl --user is-system-running >/dev/null 2>&1; then
-        systemd-run \
-            --user \
-            --quiet \
-            --collect \
-            --unit "$service_name" \
-            --setenv "HERDR_ENV=1" \
-            --setenv "HERDR_SOCKET_PATH=$HERDR_SOCKET_PATH" \
-            --setenv "HERDR_BIN_PATH=$herdr_bin" \
-            --setenv "HERDR_PLUGIN_ID=${HERDR_PLUGIN_ID:-yemeni.agent-timer}" \
-            --setenv "HERDR_PLUGIN_ROOT=$plugin_root" \
-            --setenv "HERDR_PLUGIN_STATE_DIR=$plugin_state_dir" \
-            --setenv "PATH=$PATH" \
-            "$script_path" --daemon \
-            >/dev/null 2>&1 || true
-        return 0
+    if command -v systemctl >/dev/null 2>&1 &&
+        systemctl --user show-environment >/dev/null 2>&1; then
+        install_service || true
+        return
     fi
 
     nohup "$script_path" --daemon >/dev/null 2>&1 &
 }
 
 stop_daemon() {
-    local service_name pid_file pid
+    local service_name service_path pid_file pid
     service_name="$(unit_name)"
     pid_file="$plugin_state_dir/${service_name}.pid"
 
-    if systemctl --user is-active "$service_name" >/dev/null 2>&1; then
-        systemctl --user stop "$service_name" >/dev/null 2>&1 || true
+    if command -v systemctl >/dev/null 2>&1 &&
+        service_path="$(unit_path 2>/dev/null)" &&
+        [ -e "$service_path" ]; then
+        systemctl --user disable --now "$service_name" >/dev/null 2>&1 || true
         return 0
     fi
 
