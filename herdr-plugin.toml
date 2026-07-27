@@ -1,12 +1,12 @@
 id = "yemeni.agent-timer"
 name = "Agent Timer"
-version = "0.2.0"
+version = "0.2.1"
 min_herdr_version = "0.7.0"
 description = "Alternate agent status labels with a reboot-safe elapsed timer"
 platforms = ["linux"]
 
 [[startup]]
-command = ["bash", "timer.sh", "--start"]
+command = ["bash", "timer.sh", "--ensure"]
 
 [[actions]]
 id = "start"
@@ -28,4 +28,4 @@ command = ["bash", "timer.sh", "--toggle"]
 
 [[events]]
 on = "pane.created"
-command = ["bash", "timer.sh", "--start"]
+command = ["bash", "timer.sh", "--ensure"]
