@@ -5,7 +5,9 @@ set -uo pipefail
 source_id="plugin:yemeni.agent-timer"
 herdr_bin="${HERDR_BIN_PATH:-herdr}"
 plugin_root="${HERDR_PLUGIN_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
-plugin_state_dir="${HERDR_PLUGIN_STATE_DIR:-${TMPDIR:-/tmp}}"
+default_state_root="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
+default_state_root="${default_state_root:-${TMPDIR:-/tmp}/herdr-agent-timer-$UID}"
+plugin_state_dir="${HERDR_PLUGIN_STATE_DIR:-$default_state_root/herdr-agent-timer}"
 script_path="$plugin_root/timer.sh"
 
 runtime_key() {
@@ -14,6 +16,65 @@ runtime_key() {
 
 unit_name() {
     printf 'herdr-agent-timer-%s' "$(runtime_key)"
+}
+
+ensure_state_dir() {
+    (umask 077 && mkdir -p "$plugin_state_dir")
+}
+
+disabled_path() {
+    printf '%s/%s.disabled' "$plugin_state_dir" "$(unit_name)"
+}
+
+mark_disabled() {
+    ensure_state_dir || return 1
+    : >"$(disabled_path)"
+}
+
+clear_disabled() {
+    rm -f "$(disabled_path)"
+}
+
+is_disabled() {
+    [ -e "$(disabled_path)" ]
+}
+
+process_start_time() {
+    local stat
+    [ -r "/proc/$1/stat" ] || return 1
+    IFS= read -r stat <"/proc/$1/stat" || return 1
+    stat="${stat##*) }"
+    awk '{print $20}' <<<"$stat"
+}
+
+fallback_daemon_active() {
+    local service_name pid_file pid recorded_start_time current_start_time
+    service_name="$(unit_name)"
+    pid_file="$plugin_state_dir/${service_name}.pid"
+
+    [ -r "$pid_file" ] || return 1
+    read -r pid recorded_start_time <"$pid_file" || return 1
+    case "$pid" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    case "$recorded_start_time" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+
+    current_start_time="$(process_start_time "$pid")" || return 1
+    [ "$current_start_time" = "$recorded_start_time" ]
+}
+
+daemon_active() {
+    local service_name
+    service_name="$(unit_name)"
+
+    if command -v systemctl >/dev/null 2>&1 &&
+        systemctl --user is-active "$service_name" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    fallback_daemon_active
 }
 
 unit_path() {
@@ -84,6 +145,8 @@ ensure_daemon() {
     [ -n "${HERDR_SOCKET_PATH:-}" ] || return 0
     command -v "$herdr_bin" >/dev/null 2>&1 || return 0
     command -v jq >/dev/null 2>&1 || return 0
+    ensure_state_dir || return 0
+    is_disabled && return 0
 
     if command -v systemctl >/dev/null 2>&1 &&
         systemctl --user show-environment >/dev/null 2>&1; then
@@ -94,10 +157,17 @@ ensure_daemon() {
     nohup "$script_path" --daemon >/dev/null 2>&1 &
 }
 
+start_daemon() {
+    ensure_state_dir || return 0
+    clear_disabled
+    ensure_daemon
+}
+
 stop_daemon() {
     local service_name service_path pid_file pid
     service_name="$(unit_name)"
     pid_file="$plugin_state_dir/${service_name}.pid"
+    mark_disabled || return 0
 
     if command -v systemctl >/dev/null 2>&1 &&
         service_path="$(unit_path 2>/dev/null)" &&
@@ -106,24 +176,24 @@ stop_daemon() {
         return 0
     fi
 
-    if [ -r "$pid_file" ]; then
-        IFS= read -r pid <"$pid_file" || true
-        case "$pid" in
-            ''|*[!0-9]*) return 0 ;;
-        esac
+    if fallback_daemon_active; then
+        read -r pid _ <"$pid_file" || true
         kill "$pid" 2>/dev/null || true
     fi
+    rm -f "$pid_file"
 }
 
 run_daemon() {
-    local service_name lock_file pid_file
+    local service_name lock_file pid_file start_time
+    ensure_state_dir || return 0
     service_name="$(unit_name)"
     lock_file="$plugin_state_dir/${service_name}.lock"
     pid_file="$plugin_state_dir/${service_name}.pid"
 
     exec 9>"$lock_file"
     flock -n 9 || return 0
-    printf '%s\n' "$$" >"$pid_file"
+    start_time="$(process_start_time "$$")" || return 0
+    printf '%s %s\n' "$$" "$start_time" >"$pid_file"
     trap 'rm -f "$pid_file"' EXIT
 
     declare -A started_at=()
@@ -217,17 +287,20 @@ run_daemon() {
 }
 
 case "${1:-}" in
-    --start|--ensure)
+    --start)
+        start_daemon
+        ;;
+    --ensure)
         ensure_daemon
         ;;
     --stop)
         stop_daemon
         ;;
     --toggle)
-        if systemctl --user is-active "$(unit_name)" >/dev/null 2>&1; then
+        if daemon_active; then
             stop_daemon
         else
-            ensure_daemon
+            start_daemon
         fi
         ;;
     --daemon)
