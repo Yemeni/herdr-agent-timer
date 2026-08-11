@@ -217,7 +217,7 @@ run_daemon() {
             seen["$pane_id"]=1
 
             case "$status" in
-                working)
+                working|blocked)
                     family="working"
                     if [ "${status_family[$pane_id]:-}" != "$family" ]; then
                         started_at["$pane_id"]="$now"
@@ -252,8 +252,12 @@ run_daemon() {
 
             status_family["$pane_id"]="$family"
             phase=$(((now - ${phase_started_at[$pane_id]}) / 3 % 2))
-            if [ "$phase" -eq 0 ]; then
-                label="$family"
+            if [ "$elapsed" -eq 0 ] || [ "$phase" -eq 0 ]; then
+                if [ "$family" = "working" ]; then
+                    label="$status"
+                else
+                    label="$family"
+                fi
             else
                 printf -v label '%02d:%02d' "$((elapsed / 60))" "$((elapsed % 60))"
             fi

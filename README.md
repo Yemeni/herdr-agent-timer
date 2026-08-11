@@ -3,16 +3,18 @@
 A Herdr plugin that alternates each agent's status label with its elapsed
 time:
 
-
 <img width="346" height="316" alt="image" src="https://github.com/user-attachments/assets/6f6fbed6-bc66-4df2-a033-df2eb4f44a90" />
 
 ```text
 working  →  00:03  →  working  →  00:09
+blocked  →  00:12  →  blocked  →  00:18
 completed  →  01:24  →  completed  →  01:24
 ```
 
-Each phase lasts three seconds. Working timers advance once per second.
-Completed timers freeze at the duration of the finished run.
+Each phase lasts three seconds. Working timers advance once per second and
+continue advancing while an agent is blocked waiting for input or approval.
+Completed timers freeze at the duration of the finished run. A zero-duration
+timer is never displayed; the normal status label remains visible instead.
 
 ## Install
 
