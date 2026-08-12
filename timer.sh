@@ -197,14 +197,21 @@ run_daemon() {
     trap 'rm -f "$pid_file"' EXIT
 
     declare -A started_at=()
+    declare -A agent_started_at=()
+    declare -A agent_elapsed=()
+    declare -A interruptions=()
     declare -A completed_after=()
+    declare -A completed_agent_elapsed=()
+    declare -A completed_interruptions=()
     declare -A phase_started_at=()
     declare -A status_family=()
+    declare -A last_status=()
     declare -A last_label=()
     declare -A seen=()
 
     while true; do
-        local panes_json now pane_id status family elapsed phase label
+        local panes_json now pane_id status family elapsed agent_time interruption_count phase label
+        local display_count display_phase display_slot
         panes_json="$("$herdr_bin" pane list 2>/dev/null)" || {
             sleep 1
             continue
@@ -222,20 +229,49 @@ run_daemon() {
                     if [ "${status_family[$pane_id]:-}" != "$family" ]; then
                         started_at["$pane_id"]="$now"
                         phase_started_at["$pane_id"]="$now"
+                        agent_elapsed["$pane_id"]=0
+                        interruptions["$pane_id"]=0
                         unset 'completed_after[$pane_id]'
+                        unset 'completed_agent_elapsed[$pane_id]'
+                        unset 'completed_interruptions[$pane_id]'
+                    fi
+                    if [ "$status" = "working" ] &&
+                        [ "${last_status[$pane_id]:-}" != "working" ]; then
+                        agent_started_at["$pane_id"]="$now"
+                    elif [ "$status" = "blocked" ] &&
+                        [ "${last_status[$pane_id]:-}" = "working" ]; then
+                        agent_elapsed["$pane_id"]=$(( ${agent_elapsed[$pane_id]:-0} + now - ${agent_started_at[$pane_id]} ))
+                    fi
+                    if [ "$status" = "blocked" ] &&
+                        [ "${last_status[$pane_id]:-}" != "blocked" ]; then
+                        interruptions["$pane_id"]=$(( ${interruptions[$pane_id]:-0} + 1 ))
                     fi
                     elapsed=$((now - ${started_at[$pane_id]}))
+                    if [ "$status" = "working" ]; then
+                        agent_time=$(( ${agent_elapsed[$pane_id]:-0} + now - ${agent_started_at[$pane_id]} ))
+                    else
+                        agent_time="${agent_elapsed[$pane_id]:-0}"
+                    fi
                     ;;
                 done|idle)
                     family="completed"
                     if [ "${status_family[$pane_id]:-}" = "working" ]; then
                         completed_after["$pane_id"]=$((now - ${started_at[$pane_id]}))
+                        if [ "${last_status[$pane_id]:-}" = "working" ]; then
+                            agent_elapsed["$pane_id"]=$(( ${agent_elapsed[$pane_id]:-0} + now - ${agent_started_at[$pane_id]} ))
+                        fi
+                        completed_agent_elapsed["$pane_id"]="${agent_elapsed[$pane_id]:-0}"
+                        completed_interruptions["$pane_id"]="${interruptions[$pane_id]:-0}"
                         phase_started_at["$pane_id"]="$now"
                     elif [ "${status_family[$pane_id]:-}" != "$family" ]; then
                         completed_after["$pane_id"]=0
+                        completed_agent_elapsed["$pane_id"]=0
+                        completed_interruptions["$pane_id"]=0
                         phase_started_at["$pane_id"]="$now"
                     fi
                     elapsed="${completed_after[$pane_id]:-0}"
+                    agent_time="${completed_agent_elapsed[$pane_id]:-0}"
+                    interruption_count="${completed_interruptions[$pane_id]:-0}"
                     ;;
                 *)
                     if [ -n "${last_label[$pane_id]:-}" ]; then
@@ -251,15 +287,42 @@ run_daemon() {
             esac
 
             status_family["$pane_id"]="$family"
-            phase=$(((now - ${phase_started_at[$pane_id]}) / 3 % 2))
-            if [ "$elapsed" -eq 0 ] || [ "$phase" -eq 0 ]; then
+            last_status["$pane_id"]="$status"
+            if [ "$family" = "working" ]; then
+                interruption_count="${interruptions[$pane_id]:-0}"
+            fi
+            display_count=1
+            [ "$agent_time" -gt 0 ] && display_count=$((display_count + 1))
+            [ "$elapsed" -gt 0 ] && display_count=$((display_count + 1))
+            [ "$interruption_count" -gt 0 ] && display_count=$((display_count + 1))
+            display_phase=$(((now - ${phase_started_at[$pane_id]}) / 3 % display_count))
+            label=""
+
+            if [ "$display_phase" -eq 0 ]; then
                 if [ "$family" = "working" ]; then
                     label="$status"
                 else
                     label="$family"
                 fi
             else
-                printf -v label '%02d:%02d' "$((elapsed / 60))" "$((elapsed % 60))"
+                display_slot=1
+                if [ "$agent_time" -gt 0 ]; then
+                    if [ "$display_phase" -eq "$display_slot" ]; then
+                        printf -v label '%02d:%02d agent time' "$((agent_time / 60))" "$((agent_time % 60))"
+                    else
+                        display_slot=$((display_slot + 1))
+                    fi
+                fi
+                if [ -z "${label:-}" ] && [ "$elapsed" -gt 0 ]; then
+                    if [ "$display_phase" -eq "$display_slot" ]; then
+                        printf -v label '%02d:%02d total time' "$((elapsed / 60))" "$((elapsed % 60))"
+                    else
+                        display_slot=$((display_slot + 1))
+                    fi
+                fi
+                if [ -z "${label:-}" ] && [ "$interruption_count" -gt 0 ]; then
+                    label="$interruption_count interruptions"
+                fi
             fi
 
             if [ "${last_label[$pane_id]:-}" != "$status:$label" ]; then
@@ -279,9 +342,15 @@ run_daemon() {
             if [ -z "${seen[$pane_id]:-}" ]; then
                 unset \
                     'started_at[$pane_id]' \
+                    'agent_started_at[$pane_id]' \
+                    'agent_elapsed[$pane_id]' \
+                    'interruptions[$pane_id]' \
                     'completed_after[$pane_id]' \
+                    'completed_agent_elapsed[$pane_id]' \
+                    'completed_interruptions[$pane_id]' \
                     'phase_started_at[$pane_id]' \
                     'status_family[$pane_id]' \
+                    'last_status[$pane_id]' \
                     'last_label[$pane_id]'
             fi
         done

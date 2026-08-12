@@ -1,20 +1,19 @@
 # Agent Timer
 
-A Herdr plugin that alternates each agent's status label with its elapsed
-time:
-
-<img width="346" height="316" alt="image" src="https://github.com/user-attachments/assets/6f6fbed6-bc66-4df2-a033-df2eb4f44a90" />
+A Herdr plugin that cycles each agent's label through its status, active agent
+time, total run time, and interruption count:
 
 ```text
-working  →  00:03  →  working  →  00:09
-blocked  →  00:12  →  blocked  →  00:18
-completed  →  01:24  →  completed  →  01:24
+working   →  00:03 agent time  →  00:09 total time  →  2 interruptions
+blocked   →  00:03 agent time  →  00:18 total time  →  2 interruptions
+completed →  01:24 agent time  →  01:24 total time  →  2 interruptions
 ```
 
-Each phase lasts three seconds. Working timers advance once per second and
-continue advancing while an agent is blocked waiting for input or approval.
-Completed timers freeze at the duration of the finished run. A zero-duration
-timer is never displayed; the normal status label remains visible instead.
+Each phase lasts three seconds. Agent time advances only while the agent is
+working; it pauses while the agent is blocked waiting for input or approval.
+Total time includes both working and blocked periods. Completed timers freeze
+at the final agent duration, total duration, and interruption count. An
+interruption is counted once each time an agent enters the `blocked` state.
 
 ## Install
 
