@@ -14,6 +14,9 @@ working; it pauses while the agent is blocked waiting for input or approval.
 Total time includes both working and blocked periods. Completed timers freeze
 at the final agent duration, total duration, and interruption count. An
 interruption is counted once each time an agent enters the `blocked` state.
+The timer persists these metrics per Herdr runtime under
+`$XDG_STATE_HOME/herdr-agent-timer` (or `~/.local/state/herdr-agent-timer`),
+so restarting Herdr or rebooting the machine resumes the same run.
 
 ## Install
 
