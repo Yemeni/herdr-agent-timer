@@ -1,8 +1,8 @@
 id = "yemeni.agent-timer"
 name = "Agent Timer"
-version = "0.2.3"
+version = "0.2.4"
 min_herdr_version = "0.8.0"
-description = "Alternate agent status labels with a reboot-safe elapsed timer"
+description = "Alternate agent status labels with a reboot-safe persistent timer"
 platforms = ["linux"]
 
 [[startup]]
