@@ -184,11 +184,12 @@ stop_daemon() {
 }
 
 run_daemon() {
-    local service_name lock_file pid_file start_time
+    local service_name lock_file pid_file start_time state_file state_dirty last_state_save
     ensure_state_dir || return 0
     service_name="$(unit_name)"
     lock_file="$plugin_state_dir/${service_name}.lock"
     pid_file="$plugin_state_dir/${service_name}.pid"
+    state_file="$plugin_state_dir/${service_name}.state"
 
     exec 9>"$lock_file"
     flock -n 9 || return 0
@@ -208,6 +209,66 @@ run_daemon() {
     declare -A last_status=()
     declare -A last_label=()
     declare -A seen=()
+
+    load_state() {
+        local pane_id family status saved_at saved_now
+        local saved_started_at saved_agent_started_at saved_agent_elapsed
+        local saved_interruptions saved_completed_after
+        local saved_completed_agent_elapsed saved_completed_interruptions
+        local saved_phase_started_at
+
+        [ -r "$state_file" ] || return 0
+        saved_now="$(date +%s)"
+        while IFS=$'\t' read -r pane_id family status saved_at saved_started_at \
+            saved_agent_started_at saved_agent_elapsed saved_interruptions \
+            saved_completed_after saved_completed_agent_elapsed \
+            saved_completed_interruptions saved_phase_started_at; do
+            [ -n "$pane_id" ] || continue
+            case "$saved_at:$saved_started_at:$saved_agent_started_at:$saved_agent_elapsed:$saved_interruptions:$saved_completed_after:$saved_completed_agent_elapsed:$saved_completed_interruptions:$saved_phase_started_at" in
+                *[!0-9:]*|:*) continue ;;
+            esac
+            status_family["$pane_id"]="$family"
+            last_status["$pane_id"]="$status"
+            started_at["$pane_id"]="$saved_started_at"
+            agent_started_at["$pane_id"]="$saved_agent_started_at"
+            agent_elapsed["$pane_id"]="$saved_agent_elapsed"
+            interruptions["$pane_id"]="$saved_interruptions"
+            completed_after["$pane_id"]="$saved_completed_after"
+            completed_agent_elapsed["$pane_id"]="$saved_completed_agent_elapsed"
+            completed_interruptions["$pane_id"]="$saved_completed_interruptions"
+            phase_started_at["$pane_id"]="$saved_phase_started_at"
+            if [ "$family" = "working" ] && [ "$status" = "working" ]; then
+                agent_started_at["$pane_id"]="$saved_now"
+            fi
+        done <"$state_file"
+    }
+
+    save_state() {
+        local state_tmp pane_id
+        state_tmp="$(mktemp "$state_file.XXXXXX")" || return 0
+        chmod 0600 "$state_tmp"
+        for pane_id in "${!status_family[@]}"; do
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$pane_id" \
+                "${status_family[$pane_id]}" \
+                "${last_status[$pane_id]:-}" \
+                "$(date +%s)" \
+                "${started_at[$pane_id]:-0}" \
+                "${agent_started_at[$pane_id]:-0}" \
+                "${agent_elapsed[$pane_id]:-0}" \
+                "${interruptions[$pane_id]:-0}" \
+                "${completed_after[$pane_id]:-0}" \
+                "${completed_agent_elapsed[$pane_id]:-0}" \
+                "${completed_interruptions[$pane_id]:-0}" \
+                "${phase_started_at[$pane_id]:-0}" \
+                >>"$state_tmp"
+        done
+        mv -f "$state_tmp" "$state_file"
+    }
+
+    load_state
+    state_dirty=0
+    last_state_save=0
 
     while true; do
         local panes_json now pane_id status family elapsed agent_time interruption_count phase label
@@ -234,17 +295,21 @@ run_daemon() {
                         unset 'completed_after[$pane_id]'
                         unset 'completed_agent_elapsed[$pane_id]'
                         unset 'completed_interruptions[$pane_id]'
+                        state_dirty=1
                     fi
                     if [ "$status" = "working" ] &&
                         [ "${last_status[$pane_id]:-}" != "working" ]; then
                         agent_started_at["$pane_id"]="$now"
+                        state_dirty=1
                     elif [ "$status" = "blocked" ] &&
                         [ "${last_status[$pane_id]:-}" = "working" ]; then
                         agent_elapsed["$pane_id"]=$(( ${agent_elapsed[$pane_id]:-0} + now - ${agent_started_at[$pane_id]} ))
+                        state_dirty=1
                     fi
                     if [ "$status" = "blocked" ] &&
                         [ "${last_status[$pane_id]:-}" != "blocked" ]; then
                         interruptions["$pane_id"]=$(( ${interruptions[$pane_id]:-0} + 1 ))
+                        state_dirty=1
                     fi
                     elapsed=$((now - ${started_at[$pane_id]}))
                     if [ "$status" = "working" ]; then
@@ -263,11 +328,13 @@ run_daemon() {
                         completed_agent_elapsed["$pane_id"]="${agent_elapsed[$pane_id]:-0}"
                         completed_interruptions["$pane_id"]="${interruptions[$pane_id]:-0}"
                         phase_started_at["$pane_id"]="$now"
+                        state_dirty=1
                     elif [ "${status_family[$pane_id]:-}" != "$family" ]; then
                         completed_after["$pane_id"]=0
                         completed_agent_elapsed["$pane_id"]=0
                         completed_interruptions["$pane_id"]=0
                         phase_started_at["$pane_id"]="$now"
+                        state_dirty=1
                     fi
                     elapsed="${completed_after[$pane_id]:-0}"
                     agent_time="${completed_agent_elapsed[$pane_id]:-0}"
@@ -354,6 +421,21 @@ run_daemon() {
                     'last_label[$pane_id]'
             fi
         done
+
+        if [ "$state_dirty" -eq 1 ] || [ $((now - last_state_save)) -ge 5 ]; then
+            for pane_id in "${!status_family[@]}"; do
+                if [ "${status_family[$pane_id]}" = "working" ] &&
+                    [ "${last_status[$pane_id]:-}" = "working" ]; then
+                    agent_elapsed["$pane_id"]=$((
+                        ${agent_elapsed[$pane_id]:-0} + now - ${agent_started_at[$pane_id]}
+                    ))
+                    agent_started_at["$pane_id"]="$now"
+                fi
+            done
+            save_state
+            state_dirty=0
+            last_state_save="$now"
+        fi
 
         sleep 1
     done

@@ -122,6 +122,8 @@ status_file="$test_root/statuses"
 printf 'blocked\n' >"$status_file"
 socket="$test_root/herdr-blocked.sock"
 state_dir="$test_root/blocked-state"
+blocked_runtime_key="$(printf '%s' "$socket" | cksum | awk '{print $1}')"
+blocked_state_file="$state_dir/herdr-agent-timer-$blocked_runtime_key.state"
 run_timer \
     MOCK_SYSTEMD_AVAILABLE=1 \
     MOCK_STATUS_FILE="$status_file" \
@@ -139,6 +141,9 @@ sleep 3
 grep -q -- '--state-label blocked=1 interruptions' "$herdr_log"
 kill "$daemon_pid"
 wait "$daemon_pid" 2>/dev/null || true
+
+# The durable snapshot must contain the interruption count before a restart.
+grep -Eq $'^w1:p1\tworking\tblocked\t[0-9]+\t[0-9]+\t[0-9]+\t0\t1\t' "$blocked_state_file"
 
 # Completed states cycle through the frozen agent and total durations.
 : >"$herdr_log"
