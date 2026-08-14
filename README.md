@@ -4,9 +4,9 @@ A Herdr plugin that cycles each agent's label through its status, active agent
 time, total run time, and interruption count:
 
 ```text
-working   →  00:03 agent time  →  00:09 total time  →  2 interruptions
+working   →  00:03 agent time  →  00:09 total time  →  1 interruption
 blocked   →  00:03 agent time  →  00:18 total time  →  2 interruptions
-completed →  01:24 agent time  →  01:24 total time  →  2 interruptions
+completed →  03:24 agent time  →  09:20 total time  →  10 interruptions
 ```
 
 Each phase lasts three seconds. Agent time advances only while the agent is
