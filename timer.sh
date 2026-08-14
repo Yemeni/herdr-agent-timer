@@ -251,8 +251,11 @@ run_daemon() {
 
     save_state() {
         local state_tmp pane_id
-        state_tmp="$(mktemp "$state_file.XXXXXX")" || return 0
-        chmod 0600 "$state_tmp"
+        state_tmp="$(mktemp "$state_file.XXXXXX")" || return 1
+        chmod 0600 "$state_tmp" || {
+            rm -f "$state_tmp"
+            return 1
+        }
         for pane_id in "${!status_family[@]}"; do
             printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
                 "$pane_id" \
@@ -267,9 +270,15 @@ run_daemon() {
                 "${completed_agent_elapsed[$pane_id]:-0}" \
                 "${completed_interruptions[$pane_id]:-0}" \
                 "${phase_started_at[$pane_id]:-0}" \
-                >>"$state_tmp"
+                >>"$state_tmp" || {
+                    rm -f "$state_tmp"
+                    return 1
+                }
         done
-        mv -f "$state_tmp" "$state_file"
+        mv -f "$state_tmp" "$state_file" || {
+            rm -f "$state_tmp"
+            return 1
+        }
     }
 
     load_state
@@ -357,7 +366,7 @@ run_daemon() {
                     fi
                     if [ "$grace_active" -eq 0 ] &&
                         [ "${status_family[$pane_id]:-}" = "working" ]; then
-                        completed_after["$pane_id"]=$(( ${idle_since[$pane_id]:-$now} - ${started_at[$pane_id]} ))
+                        completed_after["$pane_id"]=$(( now - ${started_at[$pane_id]} ))
                         if [ "${last_status[$pane_id]:-}" = "working" ]; then
                             agent_elapsed["$pane_id"]=$(( ${agent_elapsed[$pane_id]:-0} + now - ${agent_started_at[$pane_id]} ))
                         fi
@@ -472,9 +481,10 @@ run_daemon() {
                     agent_started_at["$pane_id"]="$now"
                 fi
             done
-            save_state
-            state_dirty=0
-            last_state_save="$now"
+            if save_state; then
+                state_dirty=0
+                last_state_save="$now"
+            fi
         fi
 
         sleep 1
