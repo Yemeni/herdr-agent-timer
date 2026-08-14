@@ -136,7 +136,9 @@ done
 grep -q -- '--state-label blocked=blocked' "$herdr_log"
 sleep 4
 grep -Eq -- '--state-label blocked=[0-9]{2}:[0-9]{2} total time' "$herdr_log"
-! grep -q -- '--state-label blocked=00:00 agent time' "$herdr_log"
+if grep -q -- '--state-label blocked=00:00 agent time' "$herdr_log"; then
+    exit 1
+fi
 sleep 3
 grep -q -- '--state-label blocked=1 interruptions' "$herdr_log"
 kill "$daemon_pid"
@@ -157,9 +159,15 @@ run_timer \
 daemon_pid=$!
 sleep 4
 grep -q -- '--state-label idle=completed' "$herdr_log"
-! grep -q -- '--state-label idle=00:00 agent time' "$herdr_log"
-! grep -q -- '--state-label idle=00:00 total time' "$herdr_log"
-! grep -q -- '--state-label idle=0 interruptions' "$herdr_log"
+if grep -q -- '--state-label idle=00:00 agent time' "$herdr_log"; then
+    exit 1
+fi
+if grep -q -- '--state-label idle=00:00 total time' "$herdr_log"; then
+    exit 1
+fi
+if grep -q -- '--state-label idle=0 interruptions' "$herdr_log"; then
+    exit 1
+fi
 kill "$daemon_pid"
 wait "$daemon_pid" 2>/dev/null || true
 

@@ -4,7 +4,7 @@ A Herdr plugin that cycles each agent's label through its status, active agent
 time, total run time, and interruption count:
 
 ```text
-working   →  00:03 agent time  →  00:09 total time  →  1 interruptions
+working   →  00:03 agent time  →  00:09 total time  →  1 interruption
 blocked   →  00:03 agent time  →  00:18 total time  →  2 interruptions
 completed →  03:24 agent time  →  09:20 total time  →  10 interruptions
 ```
@@ -17,6 +17,11 @@ interruption is counted once each time an agent enters the `blocked` state.
 The timer persists these metrics per Herdr runtime under
 `$XDG_STATE_HOME/herdr-agent-timer` (or `~/.local/state/herdr-agent-timer`),
 so restarting Herdr or rebooting the machine resumes the same run.
+Autopilot continuation gaps are allowed a ten-second idle grace period: the
+run remains open, total time continues, and agent time pauses until work
+resumes. A longer idle period completes the run. After a daemon or Herdr
+server restart, previously active runs receive a 60-second restore grace
+period while agent sessions reattach.
 
 ## Install
 

@@ -3,6 +3,8 @@
 set -uo pipefail
 
 source_id="plugin:yemeni.agent-timer"
+autopilot_idle_grace_seconds=10
+startup_restore_grace_seconds=60
 herdr_bin="${HERDR_BIN_PATH:-herdr}"
 plugin_root="${HERDR_PLUGIN_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
 default_state_root="${XDG_STATE_HOME:-${HOME:+$HOME/.local/state}}"
@@ -184,7 +186,7 @@ stop_daemon() {
 }
 
 run_daemon() {
-    local service_name lock_file pid_file start_time state_file state_dirty last_state_save
+    local service_name lock_file pid_file start_time state_file state_dirty last_state_save daemon_started_at
     ensure_state_dir || return 0
     service_name="$(unit_name)"
     lock_file="$plugin_state_dir/${service_name}.lock"
@@ -194,6 +196,7 @@ run_daemon() {
     exec 9>"$lock_file"
     flock -n 9 || return 0
     start_time="$(process_start_time "$$")" || return 0
+    daemon_started_at="$(date +%s)"
     printf '%s %s\n' "$$" "$start_time" >"$pid_file"
     trap 'rm -f "$pid_file"' EXIT
 
@@ -209,6 +212,8 @@ run_daemon() {
     declare -A last_status=()
     declare -A last_label=()
     declare -A seen=()
+    declare -A idle_since=()
+    declare -A restored=()
 
     load_state() {
         local pane_id family status saved_at saved_now
@@ -237,6 +242,7 @@ run_daemon() {
             completed_agent_elapsed["$pane_id"]="$saved_completed_agent_elapsed"
             completed_interruptions["$pane_id"]="$saved_completed_interruptions"
             phase_started_at["$pane_id"]="$saved_phase_started_at"
+            restored["$pane_id"]=1
             if [ "$family" = "working" ] && [ "$status" = "working" ]; then
                 agent_started_at["$pane_id"]="$saved_now"
             fi
@@ -245,8 +251,11 @@ run_daemon() {
 
     save_state() {
         local state_tmp pane_id
-        state_tmp="$(mktemp "$state_file.XXXXXX")" || return 0
-        chmod 0600 "$state_tmp"
+        state_tmp="$(mktemp "$state_file.XXXXXX")" || return 1
+        chmod 0600 "$state_tmp" || {
+            rm -f "$state_tmp"
+            return 1
+        }
         for pane_id in "${!status_family[@]}"; do
             printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
                 "$pane_id" \
@@ -261,9 +270,15 @@ run_daemon() {
                 "${completed_agent_elapsed[$pane_id]:-0}" \
                 "${completed_interruptions[$pane_id]:-0}" \
                 "${phase_started_at[$pane_id]:-0}" \
-                >>"$state_tmp"
+                >>"$state_tmp" || {
+                    rm -f "$state_tmp"
+                    return 1
+                }
         done
-        mv -f "$state_tmp" "$state_file"
+        mv -f "$state_tmp" "$state_file" || {
+            rm -f "$state_tmp"
+            return 1
+        }
     }
 
     load_state
@@ -271,8 +286,8 @@ run_daemon() {
     last_state_save=0
 
     while true; do
-        local panes_json now pane_id status family elapsed agent_time interruption_count phase label
-        local display_count display_phase display_slot
+        local panes_json now pane_id status display_status family elapsed agent_time interruption_count phase label
+        local display_count display_phase display_slot grace_active
         panes_json="$("$herdr_bin" pane list 2>/dev/null)" || {
             sleep 1
             continue
@@ -283,10 +298,13 @@ run_daemon() {
         while IFS=$'\t' read -r pane_id status; do
             [ -n "$pane_id" ] || continue
             seen["$pane_id"]=1
+            display_status="$status"
+            grace_active=0
 
             case "$status" in
                 working|blocked)
                     family="working"
+                    unset 'idle_since[$pane_id]'
                     if [ "${status_family[$pane_id]:-}" != "$family" ]; then
                         started_at["$pane_id"]="$now"
                         phase_started_at["$pane_id"]="$now"
@@ -320,8 +338,35 @@ run_daemon() {
                     ;;
                 done|idle)
                     family="completed"
-                    if [ "${status_family[$pane_id]:-}" = "working" ]; then
-                        completed_after["$pane_id"]=$((now - ${started_at[$pane_id]}))
+                    if [ "$status" = "idle" ] &&
+                        [ "${status_family[$pane_id]:-}" = "working" ]; then
+                        if [ -z "${idle_since[$pane_id]:-}" ]; then
+                            idle_since["$pane_id"]="$now"
+                            if [ "${last_status[$pane_id]:-}" = "working" ]; then
+                                agent_elapsed["$pane_id"]=$((
+                                    ${agent_elapsed[$pane_id]:-0} + now - ${agent_started_at[$pane_id]}
+                                ))
+                            fi
+                            state_dirty=1
+                        fi
+                        restore_grace_active=0
+                        if [ "${restored[$pane_id]:-0}" -eq 1 ] &&
+                            [ $((now - daemon_started_at)) -lt "$startup_restore_grace_seconds" ]; then
+                            restore_grace_active=1
+                        fi
+                        if [ "$restore_grace_active" -eq 1 ] ||
+                            [ $((now - idle_since[$pane_id])) -lt "$autopilot_idle_grace_seconds" ]; then
+                            family="working"
+                            display_status="working"
+                            elapsed=$((now - ${started_at[$pane_id]}))
+                            agent_time="${agent_elapsed[$pane_id]:-0}"
+                            interruption_count="${interruptions[$pane_id]:-0}"
+                            grace_active=1
+                        fi
+                    fi
+                    if [ "$grace_active" -eq 0 ] &&
+                        [ "${status_family[$pane_id]:-}" = "working" ]; then
+                        completed_after["$pane_id"]=$(( now - ${started_at[$pane_id]} ))
                         if [ "${last_status[$pane_id]:-}" = "working" ]; then
                             agent_elapsed["$pane_id"]=$(( ${agent_elapsed[$pane_id]:-0} + now - ${agent_started_at[$pane_id]} ))
                         fi
@@ -329,16 +374,20 @@ run_daemon() {
                         completed_interruptions["$pane_id"]="${interruptions[$pane_id]:-0}"
                         phase_started_at["$pane_id"]="$now"
                         state_dirty=1
-                    elif [ "${status_family[$pane_id]:-}" != "$family" ]; then
+                    elif [ "$grace_active" -eq 0 ] &&
+                        [ "${status_family[$pane_id]:-}" != "$family" ]; then
                         completed_after["$pane_id"]=0
                         completed_agent_elapsed["$pane_id"]=0
                         completed_interruptions["$pane_id"]=0
                         phase_started_at["$pane_id"]="$now"
                         state_dirty=1
                     fi
-                    elapsed="${completed_after[$pane_id]:-0}"
-                    agent_time="${completed_agent_elapsed[$pane_id]:-0}"
-                    interruption_count="${completed_interruptions[$pane_id]:-0}"
+                    if [ "$grace_active" -eq 0 ]; then
+                        elapsed="${completed_after[$pane_id]:-0}"
+                        agent_time="${completed_agent_elapsed[$pane_id]:-0}"
+                        interruption_count="${completed_interruptions[$pane_id]:-0}"
+                    fi
+                    unset 'restored[$pane_id]'
                     ;;
                 *)
                     if [ -n "${last_label[$pane_id]:-}" ]; then
@@ -367,7 +416,7 @@ run_daemon() {
 
             if [ "$display_phase" -eq 0 ]; then
                 if [ "$family" = "working" ]; then
-                    label="$status"
+                    label="$display_status"
                 else
                     label="$family"
                 fi
@@ -432,9 +481,10 @@ run_daemon() {
                     agent_started_at["$pane_id"]="$now"
                 fi
             done
-            save_state
-            state_dirty=0
-            last_state_save="$now"
+            if save_state; then
+                state_dirty=0
+                last_state_save="$now"
+            fi
         fi
 
         sleep 1
