@@ -122,6 +122,8 @@ status_file="$test_root/statuses"
 printf 'blocked\n' >"$status_file"
 socket="$test_root/herdr-blocked.sock"
 state_dir="$test_root/blocked-state"
+blocked_runtime_key="$(printf '%s' "$socket" | cksum | awk '{print $1}')"
+blocked_state_file="$state_dir/herdr-agent-timer-$blocked_runtime_key.state"
 run_timer \
     MOCK_SYSTEMD_AVAILABLE=1 \
     MOCK_STATUS_FILE="$status_file" \
@@ -132,11 +134,18 @@ for _ in $(seq 1 50); do
     sleep 0.02
 done
 grep -q -- '--state-label blocked=blocked' "$herdr_log"
+sleep 4
+grep -Eq -- '--state-label blocked=[0-9]{2}:[0-9]{2} total time' "$herdr_log"
+! grep -q -- '--state-label blocked=00:00 agent time' "$herdr_log"
+sleep 3
+grep -q -- '--state-label blocked=1 interruptions' "$herdr_log"
 kill "$daemon_pid"
 wait "$daemon_pid" 2>/dev/null || true
 
-# Zero-duration completed states keep their semantic label instead of cycling
-# to a meaningless 00:00 after the first display phase.
+# The durable snapshot must contain the interruption count before a restart.
+grep -Eq $'^w1:p1\tworking\tblocked\t[0-9]+\t[0-9]+\t[0-9]+\t0\t1\t' "$blocked_state_file"
+
+# Completed states cycle through the frozen agent and total durations.
 : >"$herdr_log"
 printf 'idle\n' >"$status_file"
 socket="$test_root/herdr-idle.sock"
@@ -148,7 +157,9 @@ run_timer \
 daemon_pid=$!
 sleep 4
 grep -q -- '--state-label idle=completed' "$herdr_log"
-! grep -q -- '--state-label idle=00:00' "$herdr_log"
+! grep -q -- '--state-label idle=00:00 agent time' "$herdr_log"
+! grep -q -- '--state-label idle=00:00 total time' "$herdr_log"
+! grep -q -- '--state-label idle=0 interruptions' "$herdr_log"
 kill "$daemon_pid"
 wait "$daemon_pid" 2>/dev/null || true
 
